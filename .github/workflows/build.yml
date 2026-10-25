@@ -1,0 +1,54 @@
+# Construit KacouAudio.exe (Windows) et KacouAudio-mac.dmg (Mac) sur les machines de GitHub.
+# Les fichiers se téléchargent dans l'onglet « Actions » → dernier build → « Artifacts ».
+# Pousser un tag (ex. v2.0) crée aussi une « Release » avec les deux fichiers.
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip pyinstaller certifi
+      - run: pyinstaller --noconfirm --clean kacou_audio.spec
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KacouAudio-windows
+          path: dist/KacouAudio.exe
+
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: PYTHON=python ./build_mac.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KacouAudio-mac
+          path: dist/KacouAudio-mac.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/KacouAudio-windows/KacouAudio.exe
+            out/KacouAudio-mac/KacouAudio-mac.dmg
