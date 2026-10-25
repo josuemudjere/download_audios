@@ -33,20 +33,54 @@ DEFAULT_LANG = "fr-fr"
 SCAN_MAX_AGE = 12 * 3600  # re-vérifier les audios disponibles toutes les 12 h
 CHUNK = 64 * 1024
 
-# --- Palette -----------------------------------------------------------------
-BG = "#0f1115"
-CARD = "#181b22"
-CARD_2 = "#1f232c"
-ROW_ALT = "#1c2029"
-BORDER = "#2a2f3a"
-TEXT = "#e9e6df"
-MUTED = "#8b909c"
-DIM = "#5c616d"
-GOLD = "#d4a64a"
-GOLD_HOVER = "#e2b85f"
-GREEN = "#5fbf7f"
-RED = "#e06c6c"
-BLUE = "#6ca8e0"
+# --- Thèmes (mode jour / mode nuit) -------------------------------------------
+THEMES = {
+    "dark": {
+        "BG": "#0e1014", "CARD": "#171a21", "CARD_2": "#1f232c", "ROW_ALT": "#1a1d25",
+        "BORDER": "#272c36", "HOVER": "#262b35", "SELECT": "#3a3120",
+        "TEXT": "#eceae4", "MUTED": "#8d93a0", "DIM": "#575d69",
+        "GOLD": "#d9a94e", "GOLD_HOVER": "#e8bb63", "ON_GOLD": "#1a1408", "TROUGH": "#242833",
+        "GREEN": "#63c787", "RED": "#e8716f", "BLUE": "#73aee6",
+    },
+    "light": {
+        "BG": "#f4f1ea", "CARD": "#ffffff", "CARD_2": "#f7f4ee", "ROW_ALT": "#faf8f4",
+        "BORDER": "#e4ded2", "HOVER": "#efeadf", "SELECT": "#f5e7c6",
+        "TEXT": "#1f2128", "MUTED": "#6b6f79", "DIM": "#a9acb4",
+        "GOLD": "#b8862b", "GOLD_HOVER": "#c99638", "ON_GOLD": "#ffffff", "TROUGH": "#ebe5d8",
+        "GREEN": "#2e8b57", "RED": "#c8443f", "BLUE": "#2f6fb3",
+    },
+}
+COLOR_ROLES = ("TEXT", "MUTED", "GOLD", "GREEN", "RED", "BLUE")
+
+
+def apply_theme(name):
+    """Change les couleurs utilisées par toute l'interface."""
+    globals().update(THEMES[name])
+
+
+def system_prefers_dark():
+    """Mode nuit activé sur l'ordinateur ? (Mac et Windows)"""
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.run(["defaults", "read", "-g", "AppleInterfaceStyle"],
+                                 capture_output=True, text=True, timeout=2).stdout
+            return "dark" in out.lower()
+        if os.name == "nt":
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                 r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+            return winreg.QueryValueEx(key, "AppsUseLightTheme")[0] == 0
+    except Exception:
+        pass
+    return False
+
+
+# Couleurs actives (remplacées par apply_theme quand on change de mode)
+(BG, CARD, CARD_2, ROW_ALT, BORDER, HOVER, SELECT, TEXT, MUTED, DIM,
+ GOLD, GOLD_HOVER, ON_GOLD, TROUGH, GREEN, RED, BLUE) = (
+    THEMES["dark"][k] for k in ("BG", "CARD", "CARD_2", "ROW_ALT", "BORDER", "HOVER", "SELECT",
+                                "TEXT", "MUTED", "DIM", "GOLD", "GOLD_HOVER", "ON_GOLD", "TROUGH",
+                                "GREEN", "RED", "BLUE"))
 
 FONT = "Segoe UI" if os.name == "nt" else "Helvetica Neue"
 
@@ -202,8 +236,8 @@ class RoundButton(tk.Canvas):
     """Bouton arrondi (les tk.Button natifs de macOS ignorent les couleurs)."""
 
     def __init__(self, parent, text, command, primary=True, width=170, height=42,
-                 bg=CARD, anchor="center"):
-        super().__init__(parent, width=width, height=height, bg=bg,
+                 bg=None, anchor="center"):
+        super().__init__(parent, width=width, height=height, bg=bg or CARD,
                          highlightthickness=0, bd=0, cursor="hand2")
         self.text, self.command, self.primary, self.anchor = text, command, primary, anchor
         self.w, self.h = width, height
@@ -217,13 +251,13 @@ class RoundButton(tk.Canvas):
         if not self.enabled:
             return (CARD_2, DIM, BORDER)
         if self.primary:
-            return (GOLD_HOVER if self.hover else GOLD, "#1a1408", GOLD)
-        return ("#272c37" if self.hover else CARD_2, TEXT, GOLD if self.hover else BORDER)
+            return (GOLD_HOVER if self.hover else GOLD, ON_GOLD, GOLD_HOVER if self.hover else GOLD)
+        return (HOVER if self.hover else CARD_2, TEXT, GOLD if self.hover else BORDER)
 
     def _draw(self):
         self.delete("all")
         fill, fg, outline = self._colors()
-        r, w, h = 12, self.w - 2, self.h - 2
+        r, w, h = 11, self.w - 2, self.h - 2
         pts = [1 + r, 1, w - r, 1, w, 1, w, 1 + r, w, h - r, w, h, w - r, h,
                1 + r, h, 1, h, 1, h - r, 1, 1 + r, 1, 1]
         self.create_polygon(pts, smooth=True, fill=fill, outline=outline, width=1)
@@ -253,10 +287,54 @@ class RoundButton(tk.Canvas):
         self._draw()
 
 
-def card(parent, **pack):
+class SlimScrollbar(tk.Canvas):
+    """Barre de défilement fine et arrondie, aux couleurs du thème."""
+
+    def __init__(self, parent, command, bg=None):
+        super().__init__(parent, width=10, bg=bg or CARD, highlightthickness=0, bd=0)
+        self.command = command
+        self.first, self.last = 0.0, 1.0
+        self._drag = None
+        self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<ButtonPress-1>", self._press)
+        self.bind("<B1-Motion>", self._move)
+        self.bind("<ButtonRelease-1>", lambda e: setattr(self, "_drag", None))
+
+    def set(self, first, last):
+        self.first, self.last = float(first), float(last)
+        self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        if self.last - self.first >= 1:
+            return
+        h, w = self.winfo_height(), self.winfo_width()
+        y1 = self.first * h
+        y2 = max(self.last * h, y1 + 28)
+        x1, x2, r = 2, w - 2, (w - 4) / 2
+        color = MUTED if self._drag else DIM
+        self.create_oval(x1, y1, x2, y1 + 2 * r, fill=color, outline="")
+        self.create_oval(x1, y2 - 2 * r, x2, y2, fill=color, outline="")
+        self.create_rectangle(x1, y1 + r, x2, y2 - r, fill=color, outline="")
+
+    def _press(self, e):
+        f = e.y / (self.winfo_height() or 1)
+        if self.first <= f <= self.last:
+            self._drag = (e.y, self.first)
+            self._draw()
+        else:
+            self.command("scroll", 1 if f > self.last else -1, "pages")
+
+    def _move(self, e):
+        if self._drag:
+            y0, f0 = self._drag
+            self.command("moveto", f0 + (e.y - y0) / (self.winfo_height() or 1))
+
+
+def card(parent, padx=22, pady_in=18, **pack):
     outer = tk.Frame(parent, bg=BORDER)
     outer.pack(**pack)
-    inner = tk.Frame(outer, bg=CARD, padx=20, pady=16)
+    inner = tk.Frame(outer, bg=CARD, padx=padx, pady=pady_in)
     inner.pack(fill="both", expand=True, padx=1, pady=1)
     return inner
 
@@ -313,10 +391,10 @@ class LanguagePicker(tk.Toplevel):
         self.tree.tag_configure("odd", background=ROW_ALT)
         self.tree.tag_configure("current", foreground=GOLD)
         self.tree.tag_configure("pending", foreground=MUTED)
-        sb = tk.Scrollbar(inner, orient="vertical", command=self.tree.yview)
+        sb = SlimScrollbar(inner, self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
+        sb.pack(side="right", fill="y", padx=(4, 4), pady=4)
 
         self.tree.bind("<Double-1>", lambda e: self.choose())
         self.bind("<Return>", lambda e: self.choose())
@@ -414,15 +492,19 @@ class App:
         self.bytes_done = 0
         self.speed_mark = (time.time(), 0)
         self.speed = 0.0
+        self.row_state = {}            # statut de chaque ligne (gardé si on change de thème)
+        self.range_limits = None
+        self.status_text, self.status_role = "Prêt.", "MUTED"
+
+        # Thème : celui choisi la dernière fois, sinon celui de l'ordinateur
+        self.theme = self.cfg.get("theme") or ("dark" if system_prefers_dark() else "light")
+        apply_theme(self.theme)
 
         root.title("Kacou Audio — Téléchargeur de prédications")
-        root.configure(bg=BG)
-        root.geometry("1340x820")
-        root.minsize(1180, 700)
+        root.geometry("1360x840")
+        root.minsize(1200, 720)
         self._set_icon()
-        self._styles()
-        self._build()
-        self._update_lang_ui()
+        self._render()
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         root.after(100, self._poll)
         root.after(200, self.load_languages)
@@ -435,76 +517,149 @@ class App:
         except tk.TclError:
             pass
 
+    # ---- thème ---------------------------------------------------------------
+    def _render(self):
+        """(Re)construit toute l'interface avec les couleurs du thème actif."""
+        for w in self.root.winfo_children():
+            w.destroy()
+        self.root.configure(bg=BG)
+        try:  # barre de titre macOS assortie au thème
+            self.root.tk.call("::tk::unsupported::MacWindowStyle", "appearance", self.root,
+                              "darkaqua" if self.theme == "dark" else "aqua")
+        except tk.TclError:
+            pass
+        self._styles()
+        self._build()
+        self._restore_state()
+
+    def toggle_theme(self):
+        self.theme = "light" if self.theme == "dark" else "dark"
+        self.cfg["theme"] = self.theme
+        save_config(self.cfg)
+        if self.picker and self.picker.winfo_exists():
+            self.picker.destroy()
+        apply_theme(self.theme)
+        self._render()
+
+    def _restore_state(self):
+        """Remet les données affichées après un changement de thème."""
+        self._update_lang_ui()
+        if self.range_limits:
+            for sp in (self.sp_from, self.sp_to):
+                sp.config(from_=self.range_limits[0], to=self.range_limits[1])
+        self.tree.delete(*self.tree.get_children())
+        for i, s in enumerate(self.sermons):
+            status, tag = self.row_state.get(s["iid"], ("En attente", None))
+            tags = ["odd"] if i % 2 else []
+            if tag:
+                tags.append(tag)
+            self.tree.insert("", "end", iid=s["iid"], tags=tags,
+                             values=(s["chapter"], s["title"], s["time"], status))
+        self._update_list_info()
+        if self.running:
+            self._update_progress()
+        else:
+            self._show_existing_counts()
+        self.set_status(self.status_text, globals()[self.status_role])
+        self._refresh_controls()
+
+    def _refresh_controls(self):
+        idle = not self.running
+        has_audio = any(s["url"] for s in self.sermons)
+        self.btn_start.configure_state(enabled=idle and has_audio)
+        for b in (self.btn_reload, self.btn_folder, self.btn_lang):
+            b.configure_state(enabled=idle)
+        self.btn_stop.configure_state(enabled=self.running and not self.stop_event.is_set())
+
     # ---- style ---------------------------------------------------------------
     def _styles(self):
         st = ttk.Style()
         st.theme_use("clam")
-        st.configure("Gold.Horizontal.TProgressbar", troughcolor=CARD_2,
-                     background=GOLD, bordercolor=CARD_2, lightcolor=GOLD,
-                     darkcolor=GOLD, thickness=12)
+        st.configure("Gold.Horizontal.TProgressbar", troughcolor=TROUGH,
+                     background=GOLD, bordercolor=TROUGH, lightcolor=GOLD,
+                     darkcolor=GOLD, thickness=10)
         st.configure("Treeview", background=CARD, fieldbackground=CARD,
-                     foreground=TEXT, rowheight=30, borderwidth=0, font=(FONT, 12))
-        st.map("Treeview", background=[("selected", "#3a3220")],
+                     foreground=TEXT, rowheight=34, borderwidth=0, font=(FONT, 12))
+        st.map("Treeview", background=[("selected", SELECT)],
                foreground=[("selected", TEXT)])
         st.configure("Treeview.Heading", background=CARD_2, foreground=MUTED,
-                     relief="flat", borderwidth=0, font=(FONT, 11, "bold"), padding=(8, 8))
+                     relief="flat", borderwidth=0, font=(FONT, 10, "bold"), padding=(10, 9))
         st.map("Treeview.Heading", background=[("active", CARD_2)])
         st.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
-        st.configure("Dark.TSpinbox", fieldbackground=CARD_2, background=CARD_2,
+        st.configure("Kacou.TSpinbox", fieldbackground=CARD_2, background=CARD_2,
                      foreground=TEXT, arrowcolor=GOLD, bordercolor=BORDER,
                      lightcolor=CARD_2, darkcolor=CARD_2, insertcolor=TEXT, padding=6)
+        st.map("Kacou.TSpinbox", fieldbackground=[("readonly", CARD_2)],
+               bordercolor=[("focus", GOLD)])
 
     # ---- interface -----------------------------------------------------------
+    def _caption(self, parent, text, bg=None):
+        return tk.Label(parent, text=text, bg=bg or CARD, fg=MUTED, font=(FONT, 10, "bold"))
+
     def _build(self):
+        # Fine bande dorée en haut de la fenêtre
+        tk.Frame(self.root, bg=GOLD, height=3).pack(fill="x", side="top")
+
         wrap = tk.Frame(self.root, bg=BG, padx=28, pady=22)
         wrap.pack(fill="both", expand=True)
 
-        self.status = tk.Label(wrap, text="Prêt.", bg=BG, fg=MUTED, anchor="w", font=(FONT, 11))
-        self.status.pack(side="bottom", fill="x", pady=(10, 0))
+        # Barre d'état en bas, avec une pastille de couleur
+        bar = tk.Frame(wrap, bg=BG)
+        bar.pack(side="bottom", fill="x", pady=(12, 0))
+        self.status_dot = tk.Label(bar, text="●", bg=BG, fg=MUTED, font=(FONT, 11))
+        self.status_dot.pack(side="left")
+        self.status = tk.Label(bar, text="", bg=BG, fg=MUTED, anchor="w", font=(FONT, 11))
+        self.status.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        tk.Label(bar, text="Source : philippekacou.org", bg=BG, fg=DIM,
+                 font=(FONT, 10)).pack(side="right")
 
         side = tk.Frame(wrap, bg=BG)
-        side.pack(side="left", fill="y", padx=(0, 22))
+        side.pack(side="left", fill="y", padx=(0, 24))
         self._build_sidebar(side)
 
         main = tk.Frame(wrap, bg=BG)
         main.pack(side="left", fill="both", expand=True)
 
-        # En-tête
+        # En-tête : icône, titre, bouton mode jour / nuit
         head = tk.Frame(main, bg=BG)
         head.pack(fill="x", pady=(0, 18))
-        logo = tk.Canvas(head, width=52, height=52, bg=BG, highlightthickness=0)
-        logo.create_oval(2, 2, 50, 50, fill=GOLD, outline="")
-        logo.create_text(26, 27, text="♪", fill="#1a1408", font=(FONT, 24, "bold"))
-        logo.pack(side="left")
+        try:
+            self.logo_img = tk.PhotoImage(file=str(ASSETS / "icon.png")).subsample(4)
+            tk.Label(head, image=self.logo_img, bg=BG, bd=0).pack(side="left")
+        except tk.TclError:
+            pass
         titles = tk.Frame(head, bg=BG)
-        titles.pack(side="left", padx=14)
+        titles.pack(side="left", padx=12)
         tk.Label(titles, text="Kacou Audio", bg=BG, fg=TEXT,
-                 font=(FONT, 24, "bold")).pack(anchor="w")
+                 font=(FONT, 26, "bold")).pack(anchor="w")
         self.lbl_subtitle = tk.Label(titles, text="", bg=BG, fg=MUTED, font=(FONT, 12))
         self.lbl_subtitle.pack(anchor="w")
+        night = self.theme == "dark"
+        RoundButton(head, "☀  Mode jour" if night else "☾  Mode nuit", self.toggle_theme,
+                    primary=False, width=150, height=40, bg=BG).pack(side="right", anchor="n")
 
         # Réglages
         c = card(main, fill="x")
         c.columnconfigure(1, weight=1)
 
-        tk.Label(c, text="LANGUE DES AUDIOS", bg=CARD, fg=MUTED,
-                 font=(FONT, 10, "bold")).grid(row=0, column=0, columnspan=3, sticky="w")
+        self._caption(c, "LANGUE DES AUDIOS").grid(row=0, column=0, columnspan=3, sticky="w")
         lang_row = tk.Frame(c, bg=CARD)
-        lang_row.grid(row=1, column=0, columnspan=3, sticky="we", pady=(6, 14))
+        lang_row.grid(row=1, column=0, columnspan=3, sticky="we", pady=(8, 16))
         self.btn_lang = RoundButton(lang_row, "", self.open_picker, primary=False,
-                                    width=340, height=44, anchor="w")
+                                    width=360, height=46, anchor="w")
         self.btn_lang.pack(side="left")
         self.lbl_lang_info = tk.Label(lang_row, text="", bg=CARD, fg=MUTED, font=(FONT, 12))
-        self.lbl_lang_info.pack(side="left", padx=14)
+        self.lbl_lang_info.pack(side="left", padx=16)
 
-        tk.Label(c, text="DOSSIER DE DESTINATION", bg=CARD, fg=MUTED,
-                 font=(FONT, 10, "bold")).grid(row=2, column=0, columnspan=3, sticky="w")
+        self._caption(c, "DOSSIER DE DESTINATION").grid(row=2, column=0, columnspan=3, sticky="w")
         path_box = tk.Frame(c, bg=CARD_2, highlightbackground=BORDER, highlightthickness=1)
-        path_box.grid(row=3, column=0, columnspan=2, sticky="we", pady=(6, 14))
+        path_box.grid(row=3, column=0, columnspan=2, sticky="we", pady=(8, 16))
+        tk.Label(path_box, text="📁", bg=CARD_2, fg=MUTED, font=(FONT, 13)).pack(side="left",
+                                                                                padx=(12, 0))
         tk.Label(path_box, textvariable=self.lang_path, bg=CARD_2, fg=TEXT, anchor="w",
-                 font=(FONT, 12), padx=12, pady=10).pack(fill="x")
+                 font=(FONT, 12), padx=10, pady=11).pack(side="left", fill="x", expand=True)
         self.btn_folder = RoundButton(c, "Changer…", self.choose_folder, primary=False, width=120)
-        self.btn_folder.grid(row=3, column=2, padx=(10, 0), pady=(6, 14))
+        self.btn_folder.grid(row=3, column=2, padx=(10, 0), pady=(8, 16))
 
         opts = tk.Frame(c, bg=CARD)
         opts.grid(row=4, column=0, columnspan=3, sticky="w")
@@ -514,34 +669,40 @@ class App:
 
         label("Du Kacou").pack(side="left")
         self.sp_from = ttk.Spinbox(opts, from_=1, to=1, width=5, textvariable=self.range_from,
-                                   style="Dark.TSpinbox", font=(FONT, 12))
+                                   style="Kacou.TSpinbox", font=(FONT, 12))
         self.sp_from.pack(side="left", padx=8)
         label("au Kacou").pack(side="left")
         self.sp_to = ttk.Spinbox(opts, from_=1, to=1, width=5, textvariable=self.range_to,
-                                 style="Dark.TSpinbox", font=(FONT, 12))
+                                 style="Kacou.TSpinbox", font=(FONT, 12))
         self.sp_to.pack(side="left", padx=8)
-        label("    Téléchargements simultanés").pack(side="left")
+        tk.Frame(opts, bg=BORDER, width=1, height=26).pack(side="left", padx=18)
+        label("Téléchargements simultanés").pack(side="left")
         self.sp_par = ttk.Spinbox(opts, from_=1, to=8, width=3, textvariable=self.parallel,
-                                  style="Dark.TSpinbox", font=(FONT, 12))
+                                  style="Kacou.TSpinbox", font=(FONT, 12))
         self.sp_par.pack(side="left", padx=8)
 
         # Actions
-        c2 = card(main, fill="x", pady=14)
+        c2 = card(main, fill="x", pady=16, pady_in=14)
         top = tk.Frame(c2, bg=CARD)
         top.pack(fill="x")
-        self.btn_start = RoundButton(top, "⬇  Tout télécharger", self.start, width=200)
+        self.btn_start = RoundButton(top, "⬇  Tout télécharger", self.start, width=210, height=46)
         self.btn_start.pack(side="left")
-        self.btn_stop = RoundButton(top, "Arrêter", self.stop, primary=False, width=110)
+        self.btn_stop = RoundButton(top, "■  Arrêter", self.stop, primary=False, width=120, height=46)
         self.btn_stop.pack(side="left", padx=10)
-        self.btn_open = RoundButton(top, "Ouvrir le dossier", self.open_folder, primary=False, width=160)
+        self.btn_open = RoundButton(top, "Ouvrir le dossier", self.open_folder, primary=False,
+                                    width=165, height=46)
         self.btn_open.pack(side="right")
-        self.btn_reload = RoundButton(top, "↻ Actualiser", self.load_list, primary=False, width=130)
+        self.btn_reload = RoundButton(top, "↻  Actualiser", self.load_list, primary=False,
+                                      width=135, height=46)
         self.btn_reload.pack(side="right", padx=10)
-        self.btn_start.configure_state(enabled=False)
-        self.btn_stop.configure_state(enabled=False)
 
         # Liste
         c3 = card(main, fill="both", expand=True)
+        list_head = tk.Frame(c3, bg=CARD)
+        list_head.pack(fill="x", pady=(0, 10))
+        self._caption(list_head, "PRÉDICATIONS").pack(side="left")
+        self.lbl_list_info = tk.Label(list_head, text="", bg=CARD, fg=MUTED, font=(FONT, 11))
+        self.lbl_list_info.pack(side="right")
         tree_box = tk.Frame(c3, bg=CARD)
         tree_box.pack(fill="both", expand=True)
         cols = ("num", "title", "time", "status")
@@ -558,34 +719,45 @@ class App:
         self.tree.tag_configure("error", foreground=RED)
         self.tree.tag_configure("skip", foreground=BLUE)
         self.tree.tag_configure("none", foreground=DIM)
-        sb = tk.Scrollbar(tree_box, orient="vertical", command=self.tree.yview)
+        sb = SlimScrollbar(tree_box, self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
+        sb.pack(side="right", fill="y", padx=(6, 0))
 
     def _build_sidebar(self, side):
         """Colonne de gauche : l'image du prophète et la progression."""
         try:
             self.banner_img = tk.PhotoImage(file=str(ASSETS / "banner.png"))
-            tk.Label(side, image=self.banner_img, bg=BG, bd=0).pack(anchor="n")
+            frame = tk.Frame(side, bg=BORDER)
+            frame.pack(anchor="n")
+            tk.Label(frame, image=self.banner_img, bg=CARD, bd=0).pack(padx=1, pady=1)
         except tk.TclError:
             pass
 
         c = card(side, fill="x", pady=(18, 0))
-        tk.Label(c, text="PROGRESSION", bg=CARD, fg=MUTED,
-                 font=(FONT, 10, "bold")).pack(anchor="w")
+        self._caption(c, "PROGRESSION").pack(anchor="w")
         row = tk.Frame(c, bg=CARD)
-        row.pack(fill="x", pady=(6, 10))
-        self.lbl_count = tk.Label(row, text="0 / 0", bg=CARD, fg=TEXT, font=(FONT, 24, "bold"))
+        row.pack(fill="x", pady=(6, 12))
+        self.lbl_count = tk.Label(row, text="0 / 0", bg=CARD, fg=TEXT, font=(FONT, 28, "bold"))
         self.lbl_count.pack(side="left")
-        self.lbl_pct = tk.Label(row, text="0 %", bg=CARD, fg=GOLD, font=(FONT, 24, "bold"))
+        self.lbl_pct = tk.Label(row, text="0 %", bg=CARD, fg=GOLD, font=(FONT, 28, "bold"))
         self.lbl_pct.pack(side="right")
         self.progress = ttk.Progressbar(c, style="Gold.Horizontal.TProgressbar",
                                         mode="determinate", maximum=100)
         self.progress.pack(fill="x")
         self.lbl_detail = tk.Label(c, text="", bg=CARD, fg=MUTED, font=(FONT, 12),
                                    anchor="w", justify="left", wraplength=280)
-        self.lbl_detail.pack(fill="x", pady=(10, 0))
+        self.lbl_detail.pack(fill="x", pady=(12, 0))
+
+        # Légende des couleurs de statut
+        legend = card(side, fill="x", pady=(14, 0), pady_in=14)
+        self._caption(legend, "LÉGENDE").pack(anchor="w", pady=(0, 6))
+        for color, text in ((GREEN, "Téléchargé"), (BLUE, "Déjà dans le dossier"),
+                            (GOLD, "En cours"), (RED, "Erreur"), (DIM, "Pas d'audio dans cette langue")):
+            line = tk.Frame(legend, bg=CARD)
+            line.pack(fill="x", pady=1)
+            tk.Label(line, text="●", bg=CARD, fg=color, font=(FONT, 11)).pack(side="left")
+            tk.Label(line, text=text, bg=CARD, fg=TEXT, font=(FONT, 11)).pack(side="left", padx=6)
 
     # ---- langue --------------------------------------------------------------
     def current_language(self):
@@ -692,8 +864,13 @@ class App:
                             GREEN)
 
     # ---- actions -------------------------------------------------------------
-    def set_status(self, text, color=MUTED):
-        self.status.config(text=text, fg=color)
+    def set_status(self, text, color=None):
+        color = color or MUTED
+        # On retient le « rôle » de la couleur pour la retrouver après un changement de thème
+        self.status_role = next((r for r in COLOR_ROLES if globals()[r] == color), "MUTED")
+        self.status_text = text
+        self.status.config(text=text, fg=TEXT if self.status_role == "MUTED" else color)
+        self.status_dot.config(fg=color)
 
     def choose_folder(self):
         if self.running:
@@ -730,7 +907,9 @@ class App:
         threading.Thread(target=work, daemon=True).start()
 
     def _fill_tree(self):
+        self.row_state = {}
         self.tree.delete(*self.tree.get_children())
+        self._update_list_info()
         for i, s in enumerate(self.sermons):
             self.tree.insert("", "end", iid=s["iid"],
                              values=(s["chapter"], s["title"], s["time"], "En attente"),
@@ -742,23 +921,39 @@ class App:
 
     def _mark_existing(self):
         folder = self.lang_dir()
-        have = n = 0
         for s in self.sermons:
             if not s["url"]:
                 self._row(s["iid"], "Pas d'audio", "none")
                 continue
-            n += 1
             exists = (folder / filename_for(s)).exists()
-            have += exists
             self._row(s["iid"], "✓ Déjà présent" if exists else "En attente",
                       "skip" if exists else None)
+        self._show_existing_counts()
+
+    def _show_existing_counts(self):
+        folder = self.lang_dir()
+        with_audio = [s for s in self.sermons if s["url"]]
+        n = len(with_audio)
+        have = sum(1 for s in with_audio if (folder / filename_for(s)).exists())
         self.lbl_count.config(text=f"{have} / {n}")
-        self.lbl_detail.config(text="déjà dans le dossier" if have else "audios disponibles")
+        if have == n and n:
+            detail = "Tout est déjà dans le dossier ✓"
+        elif have:
+            detail = f"Déjà dans le dossier · {n - have} à télécharger"
+        else:
+            detail = "Audios disponibles dans cette langue"
+        self.lbl_detail.config(text=detail)
         pct = have * 100 / n if n else 0
         self.progress["value"] = pct
         self.lbl_pct.config(text=f"{pct:.0f} %")
 
+    def _update_list_info(self):
+        n = len(self.sermons)
+        a = sum(1 for s in self.sermons if s["url"])
+        self.lbl_list_info.config(text=f"{n} prédications · {a} avec audio" if n else "")
+
     def _row(self, iid, status, tag):
+        self.row_state[iid] = (status, tag)
         if not self.tree.exists(iid):
             return
         vals = list(self.tree.item(iid, "values"))
@@ -776,11 +971,6 @@ class App:
         if a > b:
             a, b = b, a
         return [s for s in self.sermons if s["url"] and a <= s["number"] <= b]
-
-    def _set_controls(self, enabled):
-        for b in (self.btn_start, self.btn_reload, self.btn_folder, self.btn_lang):
-            b.configure_state(enabled=enabled)
-        self.btn_stop.configure_state(enabled=not enabled)
 
     def start(self):
         if self.running or not self.sermons:
@@ -815,7 +1005,7 @@ class App:
         for s in todo:
             self._row(s["iid"], "En attente", None)
         self._update_progress()
-        self._set_controls(False)
+        self._refresh_controls()
         self.set_status(f"Téléchargement de {len(todo)} audio(s) vers {folder}", GOLD)
 
         def run():
@@ -984,6 +1174,7 @@ class App:
             self.set_status(f"Aucun audio n'est disponible en {name} sur le site pour le moment.", RED)
             return
         first, last = with_audio[0]["number"], with_audio[-1]["number"]
+        self.range_limits = (first, last)
         for sp in (self.sp_from, self.sp_to):
             sp.config(from_=first, to=last)
         self.range_from.set(first)
@@ -1004,7 +1195,7 @@ class App:
         self.running = False
         self._update_progress()
         stopped = self.stop_event.is_set()
-        self._set_controls(True)
+        self._refresh_controls()
         if stopped:
             msg, color = f"Arrêté. {self.finished} / {self.total} terminés.", MUTED
         elif self.failed:
